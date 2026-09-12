@@ -321,8 +321,9 @@ static int start_care(sm_context_t *ctx)
   g_care_started = true;
 
   /* 打印任务列表 */
-
-  care_task_t tasks[CARE_MAX_TASKS];
+  /* 注意: care_task_t 含 256B message 等, 20 个约 9KB, 放栈上会溢出
+   * hello_app 任务栈(8KB), 因此用 static 一次性缓冲 */
+  static care_task_t tasks[CARE_MAX_TASKS];
   int count = care_get_task_list(&g_care_ctx, tasks, CARE_MAX_TASKS);
   printf("[关怀] 当前关怀任务: %d 个\n", count);
 
