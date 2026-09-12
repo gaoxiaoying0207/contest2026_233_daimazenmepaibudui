@@ -137,21 +137,21 @@ static void create_status_bar(lv_obj_t *parent)
 
     /* 状态文本 */
     lbl_status = lv_label_create(bar);
-    lv_label_set_text(lbl_status, "[ON] Online");
+    lv_label_set_text(lbl_status, "[在线]");
     lv_obj_set_style_text_color(lbl_status, lv_color_hex(0x4CAF50), 0);
-    lv_obj_set_style_text_font(lbl_status, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl_status, &lv_font_simsun_16_cjk, 0);
 
     /* 时间标签 */
     lbl_time = lv_label_create(bar);
     lv_label_set_text(lbl_time, "12:00");
     lv_obj_set_style_text_color(lbl_time, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl_time, &lv_font_simsun_16_cjk, 0);
 
     /* 电量/网络图标（简化为文字） */
     lv_obj_t *lbl_signal = lv_label_create(bar);
     lv_label_set_text(lbl_signal, "WiFi 100%");
     lv_obj_set_style_text_color(lbl_signal, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(lbl_signal, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl_signal, &lv_font_simsun_16_cjk, 0);
 
     /* 网络状态：由 main 的主循环轮询 network_is_connected() 后刷新，
      * 不在 network_task 里直接改，避免跨任务操作 LVGL。
@@ -288,8 +288,8 @@ static void create_bottom_buttons(lv_obj_t *parent)
     lv_obj_add_style(btn_alarm, &style_btn_alarm, 0);
     lv_obj_add_event_cb(btn_alarm, btn_event_handler, LV_EVENT_CLICKED, (void *)UI_VIEW_ALARM);
     lv_obj_t *lbl_btn3 = lv_label_create(btn_alarm);
-    lv_label_set_text(lbl_btn3, "ALARM");
-    lv_obj_set_style_text_font(lbl_btn3, &lv_font_montserrat_14, 0);
+    lv_label_set_text(lbl_btn3, "报警");
+    lv_obj_set_style_text_font(lbl_btn3, &lv_font_simsun_16_cjk, 0);
     lv_obj_center(lbl_btn3);
 }
 
@@ -346,16 +346,16 @@ static void create_alarm_screen(void)
 
     /* 报警文字 */
     lv_obj_t *text = lv_label_create(scr_alarm);
-    lv_label_set_text(text, "EMERGENCY");
+    lv_label_set_text(text, "紧急");
     lv_obj_set_style_text_color(text, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(text, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(text, &lv_font_simsun_16_cjk, 0);
     lv_obj_align(text, LV_ALIGN_CENTER, 0, 0);
 
     /* 报警详情 */
     lv_obj_t *detail = lv_label_create(scr_alarm);
-    lv_label_set_text(detail, "Abnormal detected\nFamily notified");
+    lv_label_set_text(detail, "检测到异常\n已通知家人");
     lv_obj_set_style_text_color(detail, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(detail, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(detail, &lv_font_simsun_16_cjk, 0);
     lv_obj_align(detail, LV_ALIGN_CENTER, 0, 40);
 
     /* 返回按钮 */
@@ -367,8 +367,9 @@ static void create_alarm_screen(void)
     lv_obj_add_event_cb(btn_back, btn_event_handler, LV_EVENT_CLICKED, (void *)UI_VIEW_MAIN);
 
     lv_obj_t *lbl_back = lv_label_create(btn_back);
-    lv_label_set_text(lbl_back, "Back");
+    lv_label_set_text(lbl_back, "返回");
     lv_obj_set_style_text_color(lbl_back, lv_color_hex(0xF44336), 0);
+    lv_obj_set_style_text_font(lbl_back, &lv_font_simsun_16_cjk, 0);
     lv_obj_center(lbl_back);
 
     /* 报警闪烁动画 */
@@ -444,23 +445,23 @@ void robot_ui_set_status(robot_status_t status)
     if (lbl_status) {
         switch (status) {
             case ROBOT_STATUS_IDLE:
-                lv_label_set_text(lbl_status, "[ON] Online");
+                lv_label_set_text(lbl_status, "[在线]");
                 lv_obj_set_style_text_color(lbl_status, lv_color_hex(0x4CAF50), 0);
                 break;
             case ROBOT_STATUS_LISTENING:
-                lv_label_set_text(lbl_status, "[...] Listening");
+                lv_label_set_text(lbl_status, "[聆听中]");
                 lv_obj_set_style_text_color(lbl_status, lv_color_hex(0x2196F3), 0);
                 break;
             case ROBOT_STATUS_SPEAKING:
-                lv_label_set_text(lbl_status, "[>>] Speaking");
+                lv_label_set_text(lbl_status, "[回复中]");
                 lv_obj_set_style_text_color(lbl_status, lv_color_hex(0xFF9800), 0);
                 break;
             case ROBOT_STATUS_REMINDING:
-                lv_label_set_text(lbl_status, "[!!] Reminding");
+                lv_label_set_text(lbl_status, "[提醒中]");
                 lv_obj_set_style_text_color(lbl_status, lv_color_hex(0x9C27B0), 0);
                 break;
             case ROBOT_STATUS_ALARM:
-                lv_label_set_text(lbl_status, "[!!] ALARM!");
+                lv_label_set_text(lbl_status, "[报警!]");
                 lv_obj_set_style_text_color(lbl_status, lv_color_hex(0xF44336), 0);
                 break;
             default:
