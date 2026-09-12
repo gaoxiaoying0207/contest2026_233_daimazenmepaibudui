@@ -12,9 +12,14 @@ if(CONFIG_LVX_USE_CONTEST2026_233_HELLO_APP)
   set(HELLO_APP_COMPILE_FLAGS "")
 
   if(CONFIG_HELLO_APP_LLM_AI_AGENT)
-    # The ai_agent include is at ${NUTTX_APPS_DIR}/packages/ai_agent/include
+    # Include velaclaw_client_local.c directly to avoid modifying external ai_agent
+    list(APPEND HELLO_APP_SRCS
+      ${NUTTX_APPS_DIR}/packages/ai_agent/src/sdk/velaclaw_client_local.c
+    )
+
     list(APPEND HELLO_APP_COMPILE_FLAGS
       -I${NUTTX_APPS_DIR}/packages/ai_agent/include
+      -I${NUTTX_APPS_DIR}/packages/ai_agent/src
     )
   endif()
 
