@@ -218,19 +218,19 @@ static void create_menu_panel(menu_type_t type)
     lv_obj_t *title = lv_label_create(menu_panel);
     switch (type) {
         case MENU_TYPE_MAIN:
-            lv_label_set_text(title, "[M] Main Menu");
+            lv_label_set_text(title, "[主] 主菜单");
             break;
         case MENU_TYPE_REMIND:
-            lv_label_set_text(title, "[T] Reminders");
+            lv_label_set_text(title, "[提] 提醒");
             break;
         case MENU_TYPE_SETTING:
-            lv_label_set_text(title, "[S] Settings");
+            lv_label_set_text(title, "[设] 设置");
             break;
         case MENU_TYPE_ABOUT:
-            lv_label_set_text(title, "[?] About");
+            lv_label_set_text(title, "[?] 关于");
             break;
         default:
-            lv_label_set_text(title, "Menu");
+            lv_label_set_text(title, "菜单");
             break;
     }
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
@@ -240,11 +240,11 @@ static void create_menu_panel(menu_type_t type)
     /* 根据菜单类型创建内容 */
     switch (type) {
         case MENU_TYPE_MAIN:
-            create_menu_item(menu_panel, "[V] Voice Chat", "Talk with robot", 0);
-            create_menu_item(menu_panel, "[T] View Reminders", "Check today's reminders", 1);
-            create_menu_item(menu_panel, "[S] Settings", "Volume, brightness etc.", 2);
-            create_menu_item(menu_panel, "[C] Emergency Call", "Contact family", 3);
-            create_menu_item(menu_panel, "[?] About", "Version info", 4);
+            create_menu_item(menu_panel, "[语] 语音聊天", "与机器人对话", 0);
+            create_menu_item(menu_panel, "[提] 查看提醒", "查看今日提醒", 1);
+            create_menu_item(menu_panel, "[设] 设置", "音量、亮度等", 2);
+            create_menu_item(menu_panel, "[急] 紧急呼叫", "联系家人", 3);
+            create_menu_item(menu_panel, "[?] 关于", "版本信息", 4);
             break;
 
         case MENU_TYPE_REMIND:
@@ -304,8 +304,9 @@ static void create_reminder_list_items(lv_obj_t *parent)
     if (reminder_count == 0) {
         /* 空提醒 */
         lv_obj_t *empty = lv_label_create(parent);
-        lv_label_set_text(empty, "No reminders\n\nTap + to add");
+        lv_label_set_text(empty, "暂无提醒\n\n点击 + 添加");
         lv_obj_set_style_text_color(empty, lv_color_hex(0x9E9E9E), 0);
+        lv_obj_set_style_text_font(empty, &lv_font_simsun_16_cjk, 0);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_pad_top(empty, 50, 0);
     } else {
@@ -357,22 +358,22 @@ static void create_setting_panel(void)
 
     /* 标题 */
     lv_obj_t *title = lv_label_create(setting_panel);
-    lv_label_set_text(title, "[S] Settings");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_label_set_text(title, "[设] 设置");
+    lv_obj_set_style_text_font(title, &lv_font_simsun_16_cjk, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFEB3B), 0);
     lv_obj_set_style_pad_bottom(title, 20, 0);
 
     /* 音量设置 */
-    create_slider_setting(setting_panel, "[V] Volume", user_settings.volume, 0);
+    create_slider_setting(setting_panel, "[音] 音量", user_settings.volume, 0);
 
     /* 亮度设置 */
-    create_slider_setting(setting_panel, "[B] Brightness", user_settings.brightness, 1);
+    create_slider_setting(setting_panel, "[亮] 亮度", user_settings.brightness, 1);
 
     /* 自动提醒开关 */
-    create_switch_setting(setting_panel, "[T] Auto Remind", user_settings.auto_remind, 2);
+    create_switch_setting(setting_panel, "[自] 自动提醒", user_settings.auto_remind, 2);
 
     /* 提醒间隔 */
-    create_interval_setting(setting_panel, "[I] Remind Interval", user_settings.remind_interval, 3);
+    create_interval_setting(setting_panel, "[间] 提醒间隔", user_settings.remind_interval, 3);
 
     /* 恢复默认设置按钮 */
     lv_obj_t *btn_reset = lv_btn_create(setting_panel);
@@ -380,7 +381,8 @@ static void create_setting_panel(void)
     lv_obj_add_style(btn_reset, &style_back_btn, 0);
     lv_obj_add_event_cb(btn_reset, setting_reset_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl_reset = lv_label_create(btn_reset);
-    lv_label_set_text(lbl_reset, "[R] Reset Default");
+    lv_label_set_text(lbl_reset, "[重] 恢复默认");
+    lv_obj_set_style_text_font(lbl_reset, &lv_font_simsun_16_cjk, 0);
     lv_obj_center(lbl_reset);
 
     /* 返回按钮 */
@@ -483,7 +485,7 @@ static void create_interval_setting(lv_obj_t *parent, const char *title,
 
     /* 间隔选项 */
     uint16_t intervals[] = {30, 60, 120, 180};
-    const char *interval_texts[] = {"30min", "1hr", "2hr", "3hr"};
+    const char *interval_texts[] = {"30分钟", "1小时", "2小时", "3小时"};
 
     for (int i = 0; i < 4; i++) {
         lv_obj_t *btn = lv_btn_create(btn_group);
@@ -512,15 +514,15 @@ static void create_about_info(lv_obj_t *parent)
     /* 关于信息 */
     lv_obj_t *info = lv_label_create(parent);
     lv_label_set_text(info,
-        "ZhiAi Companion\n"
-        "Version: v1.0.0\n\n"
-        "AI Elder Companion\n"
-        "Guardian Terminal\n\n"
-        "Board: SF32LB52-DevKit-LCD\n"
-        "GUI: LVGL\n\n"
-        "2026 ZhiAi Team");
+        "智爱陪伴\n"
+        "版本: v1.0.0\n\n"
+        "AI 老人陪伴\n"
+        "守护终端\n\n"
+        "开发板: SF32LB52-DevKit-LCD\n"
+        "界面: LVGL\n\n"
+        "2026 智爱团队");
     lv_obj_set_style_text_color(info, lv_color_hex(0xCCCCCC), 0);
-    lv_obj_set_style_text_font(info, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(info, &lv_font_simsun_16_cjk, 0);
     lv_obj_set_style_text_align(info, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_pad_top(info, 20, 0);
 }
@@ -535,7 +537,8 @@ static void create_back_button(lv_obj_t *parent)
     lv_obj_add_event_cb(btn, back_button_event_handler, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, "< Back");
+    lv_label_set_text(lbl, "< 返回");
+    lv_obj_set_style_text_font(lbl, &lv_font_simsun_16_cjk, 0);
     lv_obj_center(lbl);
 }
 
@@ -560,7 +563,7 @@ static void menu_item_event_handler(lv_event_t *e)
             touch_ui_show_menu(MENU_TYPE_SETTING);
             break;
         case 3: // 紧急联系
-            touch_ui_show_setting_detail("Emergency", "Calling family...\nPlease wait");
+            touch_ui_show_setting_detail("紧急呼叫", "正在联系家人...\n请稍候");
             break;
         case 4: // 关于
             touch_ui_show_menu(MENU_TYPE_ABOUT);
@@ -630,7 +633,7 @@ static void reminder_item_event_handler(lv_event_t *e)
 /* 恢复默认设置事件 */
 static void setting_reset_event_handler(lv_event_t *e)
 {
-    show_confirm_dialog("Reset", "Reset to default settings?",
+    show_confirm_dialog("重置", "确定恢复默认设置？",
                        confirm_dialog_event_handler);
 }
 
@@ -682,13 +685,13 @@ static void show_confirm_dialog(const char *title, const char *content,
     lv_msgbox_add_text(mbox, content);
 
     /* 添加确认和取消按钮 */
-    lv_obj_t *btn_confirm = lv_msgbox_add_footer_button(mbox, "OK");
-    lv_obj_t *btn_cancel = lv_msgbox_add_footer_button(mbox, "Cancel");
+    lv_obj_t *btn_confirm = lv_msgbox_add_footer_button(mbox, "确定");
+    lv_obj_t *btn_cancel = lv_msgbox_add_footer_button(mbox, "取消");
 
     lv_obj_center(mbox);
     lv_obj_set_style_bg_color(mbox, lv_color_hex(0x2D2D44), 0);
     lv_obj_set_style_text_color(mbox, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(mbox, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(mbox, &lv_font_simsun_16_cjk, 0);
 
     /* 添加按钮事件 */
     lv_obj_add_event_cb(btn_cancel, callback, LV_EVENT_CLICKED, (void *)(intptr_t)0);
@@ -705,7 +708,7 @@ void touch_ui_set_mode(robot_mode_t mode)
     /* 根据模式更新界面 */
     switch (mode) {
         case MODE_LISTENING:
-            touch_ui_show_setting_detail("Voice Chat", "Listening...\nPlease speak");
+            touch_ui_show_setting_detail("语音聊天", "聆听中...\n请说话");
             break;
         case MODE_SLEEP:
             /* 降低亮度，显示休眠界面 */
