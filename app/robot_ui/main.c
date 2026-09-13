@@ -6,6 +6,7 @@
 #include <nuttx/config.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include <sched.h>
 #include <lvgl/lvgl.h>
 
@@ -21,6 +22,7 @@
 #include "ai_llm.h"
 #include "ai_sound_detect.h"
 #include "ai_care.h"
+#include "ai_checkin.h"
 #include <string.h>
 
 /* LVGL 定时器 */
@@ -150,7 +152,7 @@ static void vad_callback(bool speech_detected, void *user_data)
 /**
  * LLM 回调 - AI 回复
  */
-static void llm_response_callback(const char *response, void *user_data)
+__attribute__((unused)) static void llm_response_callback(const char *response, void *user_data)
 {
     printf("[LLM] Response: %s\n", response);
 
@@ -171,32 +173,87 @@ static void llm_response_callback(const char *response, void *user_data)
 /**
  * 声音检测回调 - 异常声音
  */
-static void sound_alarm_callback(const char *sound_type, int confidence, void *user_data)
+static void sound_alarm_callback(sound_type_t type, float confidence, void *user_data)
 {
-    printf("[SoundDetect] Alarm: %s (confidence: %d)\n", sound_type, confidence);
+    const char *type_name = sound_detect_get_type_name(type);
+    printf("[SoundDetect] Alarm: %s (confidence: %.2f)\n", type_name, confidence);
 
     /* 触发报警 */
-    robot_ui_show_alarm(sound_type);
-    report_alarm(sound_type, "Abnormal sound detected");
+    robot_ui_show_alarm(type_name);
+    report_alarm(type_name, "Abnormal sound detected");
 
     /* 通知状态机 */
     sm_handle_event(&g_sm_ctx, SM_EVENT_ALARM_DETECTED);
 }
 
 /**
- * 主动关怀回调
+ * 关怀确认按钮回调 - 用户点击"我没事"或"需要帮助"后触发
+ * 由 UI 线程调用，通过 ai_checkin_respond 提交给状态机
  */
-static void care_remind_callback(const char *title, const char *content, void *user_data)
+static void checkin_btn_callback(uint64_t checkin_id, bool needs_help, void *user_data)
 {
-    printf("[Care] Reminder: %s - %s\n", title, content);
+    uint64_t now_ms = lv_tick_get();
+    printf("[Checkin] Respond: id=%lu needs_help=%d\n",
+           (unsigned long)checkin_id, needs_help);
 
-    /* 显示提醒 */
+    int ret = ai_checkin_respond(checkin_id, needs_help, now_ms);
+    if (ret != 0) {
+        printf("[Checkin] respond failed: %d\n", ret);
+    }
+}
+
+/* 用于 lv_async_call 的 show_checkin 参数 */
+typedef struct {
+    uint64_t checkin_id;
+    uint32_t timeout_ms;
+    checkin_btn_cb_t cb;
+    void *user_data;
+} show_checkin_arg_t;
+
+/* lv_async_call 回调：在 LVGL 线程中显示 checkin 面板 */
+static void show_checkin_async(void *arg_ptr)
+{
+    show_checkin_arg_t *arg = (show_checkin_arg_t *)arg_ptr;
+    touch_ui_show_checkin(arg->checkin_id, arg->timeout_ms,
+                          arg->cb, arg->user_data);
+    free(arg);
+}
+
+/**
+ * 主动关怀回调 - 从 care 模块线程调用
+ * care_remind_callback 不直接操作 LVGL，通过 lv_async_call 投递到 UI 线程
+ */
+static void care_remind_callback(care_type_t type, const char *message, void *user_data)
+{
+    const char *type_name = care_get_type_name(type);
+    printf("[Care] Reminder: %s - %s\n", type_name, message);
+
+    /* 显示提醒（robot_ui_* 内部已有线程安全机制） */
     robot_ui_set_status(ROBOT_STATUS_REMINDING);
     robot_ui_set_face(ROBOT_FACE_WORRIED);
-    robot_ui_show_reminder(title, content);
+    robot_ui_show_reminder(type_name, message);
 
     /* 发送推送 */
-    push_send_health_reminder(title, content);
+    push_send_health_reminder(type_name, message);
+
+    /* 启动关怀确认：分配 30 秒超时 */
+    uint64_t checkin_id = 0;
+    uint64_t now_ms = lv_tick_get();
+    if (ai_checkin_begin(now_ms, 30000, &checkin_id) == 0) {
+        printf("[Checkin] Started: id=%lu\n", (unsigned long)checkin_id);
+
+        /* 通过 lv_async_call 投递到 LVGL 线程显示 checkin 面板 */
+        show_checkin_arg_t *arg = malloc(sizeof(show_checkin_arg_t));
+        if (arg) {
+            arg->checkin_id = checkin_id;
+            arg->timeout_ms = 30000;
+            arg->cb = checkin_btn_callback;
+            arg->user_data = NULL;
+            lv_async_call(show_checkin_async, arg);
+        }
+    } else {
+        printf("[Checkin] Failed to start\n");
+    }
 }
 
 /* ==================== MQTT 消息回调处理 ==================== */
@@ -244,11 +301,21 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* 触摸采样周期:默认跟随 LV_DEF_REFR_PERIOD（33ms ~ 30Hz），手感偏迟钝。
+     * 这里只把输入设备读取定时器提到 10ms，屏幕刷新节奏不变。 */
+    if (lv_result.indev != NULL)
+    {
+        lv_timer_set_period(lv_indev_get_read_timer(lv_result.indev), 10);
+    }
+
     /* ===== 初始化网络通信 ===== */
     network_comm_init();
 
-    /* ===== 连接 WiFi ===== */
-    wifi_connect("魔王城", "sjmbahczdszjj");
+    /* ===== WiFi 连接 ===== */
+    /* NOTE: 板子通过 USB RNDIS 上网，WiFi 代码未实际使用。
+     * network_comm.c 中的 wifi_connect() 只是设置 wifi_config.connected = true，
+     * 让 MQTT 能启动连接。不要删除此调用，否则 MQTT 不会连接。 */
+    wifi_connect("RNDIS", "");
 
     /* ===== 启动网络后台任务 =====
      * 负责 MQTT 连接 broker.emqx.io:1883、收消息、发心跳。
@@ -260,10 +327,12 @@ int main(int argc, char *argv[])
     }
 
     /* ===== 初始化手机推送服务 ===== */
+    /* key 传 NULL：由 network_comm.c 统一从 /etc/assets/push_key.txt
+     * 或那里的 PUSH_KEY_DEFAULT* 取，源码里不再硬编码密钥。 */
     /* PushPlus (Android 微信推送) */
-    push_init(PUSH_SERVICE_PUSHPLUS, "1043ad84f9ba4dbb921756173d36277a");
+    push_init(PUSH_SERVICE_PUSHPLUS, NULL);
     /* Bark (iPad iOS 推送) */
-    push_init(PUSH_SERVICE_BARK, "726d1da9c292efcf947a85897c38310f6200a45c60ec8683813ae4d06fe67be9");
+    push_init(PUSH_SERVICE_BARK, NULL);
 
     /* ===== 注册回调函数 ===== */
     network_set_mqtt_callback(on_mqtt_message_received);
@@ -354,6 +423,7 @@ int main(int argc, char *argv[])
     while (1) {
         static int  net_tick = 0;
         static bool net_ok   = false;
+        static int  time_tick = 0;
 
         lvgl_timer_handler();
 
@@ -369,6 +439,12 @@ int main(int argc, char *argv[])
                 net_ok = ok;
                 robot_ui_set_net_status(ok ? "NET OK" : "NET --");
             }
+        }
+
+        /* 每 ~1s 刷新状态栏时钟 */
+        if (++time_tick >= 200) {
+            time_tick = 0;
+            robot_ui_update_time();
         }
 
         /* 运行 AI 模块 */

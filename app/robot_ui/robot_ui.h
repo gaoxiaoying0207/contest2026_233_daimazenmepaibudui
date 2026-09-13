@@ -64,6 +64,9 @@ void robot_ui_show_alarm(const char *content);
 /* 关闭报警 */
 void robot_ui_close_alarm(void);
 
+/* 刷新状态栏时钟（从 main 主循环调用，与 LVGL 定时器双重保障） */
+void robot_ui_update_time(void);
+
 /* 切换界面 */
 void robot_ui_switch_view(ui_view_t view);
 

@@ -3,6 +3,7 @@
  * WiFi 连接、MQTT 通信、云端交互
  */
 
+#include <nuttx/config.h>
 #include "network_comm.h"
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
 
 /* NuttX 网络头文件 */
 #include <sys/socket.h>
@@ -20,6 +22,10 @@
 #include <arpa/inet.h>
 #include <netdb.h> /* gethostbyname / struct hostent（DNS 解析） */
 #include <unistd.h>
+
+/* 板级外设状态（board/contest_board/src/sf32lb52_status.h）：
+ * 这里只负责把 MQTT 连接状态喂进去，供 hw_test status / UI 统一查询。 */
+#include "sf32lb52_status.h"
 
 /* cJSON 用于 JSON 解析 */
 #include <netutils/cJSON.h>
@@ -283,6 +289,7 @@ int mqtt_connect(const char *broker, uint16_t port,
     }
 
     mqtt_config.connected = true;
+    board_status_set_mqtt(true);   /* 喂给统一状态查询 */
     printf("MQTT connected\n");
 
     /* 订阅命令主题 */
@@ -303,6 +310,7 @@ int mqtt_disconnect(void)
     }
 
     mqtt_config.connected = false;
+    board_status_set_mqtt(false);  /* 喂给统一状态查询 */
     printf("MQTT disconnected\n");
     return 0;
 }
@@ -389,6 +397,12 @@ int report_alarm(const char *alarm_type, const char *details)
     /* 发布报警消息（QoS 1，确保送达） */
     int ret = mqtt_publish(topic, json, 1, false);
     free(json);
+
+    /* 这一行是特意加出来给人看的：原来这里完全静默，串口上看不出它到底跑没跑、
+     * 上报成功没有。ret < 0 最常见的原因就是 MQTT 没连上
+     * （板子 DNS 解析失败，通常是 USB 没重新枚举）。 */
+    printf("[ALARM] report_alarm type=%s topic=%s ret=%d\n",
+           alarm_type, topic, ret);
 
     /* 触发本地报警回调 */
     if (alarm_callback) {
@@ -484,21 +498,304 @@ static push_config_t push_config = {0};
 /* HTTP 请求缓冲区大小 */
 #define HTTP_BUFFER_SIZE 2048
 
-/* 初始化推送服务 */
-int push_init(push_service_t service, const char *key)
+/* -------------------------------------------------------------------------
+ * 推送密钥
+ *
+ * ⚠️ 这里有**两个空串**是故意的，而且必须一直是空串：本仓库是公开仓库，
+ *    把 Bark 的 device_key / PushPlus 的 token 写在源码里等于公开"给这台
+ *    设备的手机推消息"的能力（历史上确实这么干过，已清理）。
+ *
+ *    上传/提交公开仓库前不要填 key；key 只放在设备本地、不进仓库的
+ *        /etc/assets/push_key.txt
+ *    （一行纯文本，自动去掉首尾空白；本机工作区里对应
+ *     board/contest_board/src/etc/assets/push_key.txt，该文件已被
+ *     .git/info/exclude 忽略，只用于本机演示，不要 git add）。
+ *    运行时优先读这个文件，读不到才退回下面的编译期默认值；
+ *    push_init(service, NULL) 走的就是这条路径。
+ *    注意：两个服务共用同一个文件，同一时刻只能放一个 key（演示用的是 Bark）。
+ * ---------------------------------------------------------------------- */
+#define PUSH_KEY_FILE             "/etc/assets/push_key.txt"
+#define PUSH_KEY_DEFAULT          ""
+#define PUSH_KEY_DEFAULT_PUSHPLUS ""
+
+/* HTTP 请求超时（秒）。TLS 握手 + 一个来回，10s 内足够。 */
+#define PUSH_HTTP_TIMEOUT_SEC 10
+
+/* 读密钥：优先 /etc/assets/push_key.txt（本机演示用，不进仓库），
+ * 没有这个文件时退回编译期默认值——公开仓库里那两项都是空串，
+ * 所以此时返回 false，push 会明确报"没有 key"而不是拿一个假 key 去发。 */
+static bool push_load_key(push_service_t service, char *out, size_t outlen)
 {
-    if (!key || key[0] == '\0') {
-        printf("push_init: invalid key\n");
+    FILE *fp;
+    size_t n;
+
+    if (out == NULL || outlen == 0) {
+        return false;
+    }
+
+    fp = fopen(PUSH_KEY_FILE, "r");
+    if (fp != NULL) {
+        if (fgets(out, (int)outlen, fp) != NULL) {
+            n = strlen(out);
+            while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r' ||
+                             out[n - 1] == ' '  || out[n - 1] == '\t')) {
+                out[--n] = '\0';
+            }
+            fclose(fp);
+            if (n > 0) {
+                printf("[PUSH] key loaded from %s (%d chars)\n",
+                       PUSH_KEY_FILE, (int)n);
+                return true;
+            }
+        } else {
+            fclose(fp);
+        }
+    }
+
+    strncpy(out, (service == PUSH_SERVICE_PUSHPLUS)
+                     ? PUSH_KEY_DEFAULT_PUSHPLUS : PUSH_KEY_DEFAULT,
+            outlen - 1);
+    out[outlen - 1] = '\0';
+    return out[0] != '\0';
+}
+
+/* -------------------------------------------------------------------------
+ * TLS over webclient
+ *
+ * webclient 自身不做 TLS，但允许应用通过 ctx.tls_ops 注入实现
+ * （见 apps/netutils/webclient/webclient.c 里 scheme==https && tls_ops!=NULL
+ *  的分支）。这里用 mbedtls 在一个普通 fd 上做握手，webclient 就能对
+ * https:// URL 正常发请求并回填 ctx.http_status。
+ * 结构/流程与 apps/packages/demos/mimo/mimo_provider.c 的 mimo_tls_* 一致。
+ * ---------------------------------------------------------------------- */
+#ifdef CONFIG_CRYPTO_MBEDTLS
+
+struct push_tls_ctx_s
+{
+    mbedtls_entropy_context  entropy;
+    mbedtls_ctr_drbg_context ctr_drbg;
+    mbedtls_ssl_config       conf;
+};
+
+struct push_tls_conn_s
+{
+    mbedtls_ssl_context ssl;
+    int                 fd;
+};
+
+/* mbedtls BIO：直接用 fd 收发，绕过 mbedtls_net_connect 的 getaddrinfo 差异 */
+static int push_bio_send(void *ctx, const unsigned char *buf, size_t len)
+{
+    int fd = *(int *)ctx;
+    ssize_t ret = send(fd, buf, len, 0);
+
+    if (ret < 0) {
+        return -EIO;
+    }
+    return (int)ret;
+}
+
+static int push_bio_recv(void *ctx, unsigned char *buf, size_t len)
+{
+    int fd = *(int *)ctx;
+    ssize_t ret = recv(fd, buf, len, 0);
+
+    if (ret < 0) {
+        return -EIO;
+    }
+    if (ret == 0) {
+        return MBEDTLS_ERR_SSL_WANT_READ;
+    }
+    return (int)ret;
+}
+
+static int push_tls_connect(void *ctx, const char *hostname, const char *port,
+                            unsigned int timeout_sec,
+                            struct webclient_tls_connection **connp)
+{
+    struct push_tls_ctx_s *tctx = ctx;
+    struct push_tls_conn_s *conn;
+    struct hostent *he;
+    struct sockaddr_in server;
+    int portnum;
+    int ret;
+    int fd;
+
+    (void)timeout_sec;
+
+    printf("[PUSH] TLS connecting to %s:%s\n", hostname, port);
+
+    he = gethostbyname(hostname);
+    if (he == NULL) {
+        printf("[PUSH] DNS resolve failed for %s\n", hostname);
+        return -EIO;
+    }
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        printf("[PUSH] socket() failed: %d\n", errno);
+        return -EIO;
+    }
+
+    portnum = atoi(port);
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons((uint16_t)portnum);
+    memcpy(&server.sin_addr, he->h_addr_list[0], he->h_length);
+
+    if (connect(fd, (struct sockaddr *)&server, sizeof(server)) < 0) {
+        printf("[PUSH] TCP connect to %s:%d failed: %d\n",
+               hostname, portnum, errno);
+        close(fd);
+        return -EIO;
+    }
+
+    conn = calloc(1, sizeof(*conn));
+    if (conn == NULL) {
+        close(fd);
+        return -ENOMEM;
+    }
+
+    conn->fd = fd;
+    mbedtls_ssl_init(&conn->ssl);
+
+    ret = mbedtls_ssl_setup(&conn->ssl, &tctx->conf);
+    if (ret != 0) {
+        printf("[PUSH] TLS setup failed: -0x%x\n", -ret);
+        goto err;
+    }
+
+    ret = mbedtls_ssl_set_hostname(&conn->ssl, hostname);
+    if (ret != 0) {
+        printf("[PUSH] TLS set hostname failed: -0x%x\n", -ret);
+        goto err;
+    }
+
+    mbedtls_ssl_set_bio(&conn->ssl, &conn->fd,
+                        push_bio_send, push_bio_recv, NULL);
+
+    while ((ret = mbedtls_ssl_handshake(&conn->ssl)) != 0) {
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ &&
+            ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+            printf("[PUSH] TLS handshake failed: -0x%x\n", -ret);
+            goto err;
+        }
+    }
+
+    printf("[PUSH] TLS handshake complete\n");
+    *connp = (struct webclient_tls_connection *)conn;
+    return 0;
+
+err:
+    mbedtls_ssl_free(&conn->ssl);
+    close(conn->fd);
+    free(conn);
+    return -EIO;
+}
+
+static ssize_t push_tls_send(void *ctx, struct webclient_tls_connection *base,
+                             const void *buf, size_t len)
+{
+    struct push_tls_conn_s *conn = (struct push_tls_conn_s *)base;
+    int ret;
+
+    (void)ctx;
+    ret = mbedtls_ssl_write(&conn->ssl, buf, len);
+    if (ret < 0) {
+        return (ret == MBEDTLS_ERR_SSL_WANT_WRITE) ? 0 : -EIO;
+    }
+    return ret;
+}
+
+static ssize_t push_tls_recv(void *ctx, struct webclient_tls_connection *base,
+                             void *buf, size_t len)
+{
+    struct push_tls_conn_s *conn = (struct push_tls_conn_s *)base;
+    int ret;
+
+    (void)ctx;
+    ret = mbedtls_ssl_read(&conn->ssl, buf, len);
+    if (ret < 0) {
+        if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY ||
+            ret == MBEDTLS_ERR_SSL_WANT_READ) {
+            return 0;
+        }
+        return -EIO;
+    }
+    return ret;
+}
+
+static int push_tls_close(void *ctx, struct webclient_tls_connection *base)
+{
+    struct push_tls_conn_s *conn = (struct push_tls_conn_s *)base;
+
+    (void)ctx;
+    mbedtls_ssl_close_notify(&conn->ssl);
+    mbedtls_ssl_free(&conn->ssl);
+    close(conn->fd);
+    free(conn);
+    return 0;
+}
+
+static int push_tls_get_poll_info(void *ctx,
+                                  struct webclient_tls_connection *base,
+                                  struct webclient_poll_info *info)
+{
+    struct push_tls_conn_s *conn = (struct push_tls_conn_s *)base;
+
+    (void)ctx;
+    info->fd = conn->fd;
+    info->flags = WEBCLIENT_POLL_INFO_WANT_READ;
+    return 0;
+}
+
+static const struct webclient_tls_ops g_push_tls_ops =
+{
+    .connect         = push_tls_connect,
+    .send            = push_tls_send,
+    .recv            = push_tls_recv,
+    .close           = push_tls_close,
+    .get_poll_info   = push_tls_get_poll_info,
+    .init_connection = NULL,
+};
+
+static struct push_tls_ctx_s g_push_tls_ctx;
+static bool g_push_tls_ready = false;
+
+static int push_tls_init(void)
+{
+    int ret;
+
+    if (g_push_tls_ready) {
+        return 0;
+    }
+
+    mbedtls_entropy_init(&g_push_tls_ctx.entropy);
+    mbedtls_ctr_drbg_init(&g_push_tls_ctx.ctr_drbg);
+    mbedtls_ssl_config_init(&g_push_tls_ctx.conf);
+
+    ret = mbedtls_ctr_drbg_seed(&g_push_tls_ctx.ctr_drbg,
+                                mbedtls_entropy_func,
+                                &g_push_tls_ctx.entropy,
+                                (const unsigned char *)"push", 4);
+    if (ret != 0) {
+        printf("[PUSH] TLS drbg seed failed: -0x%x\n", -ret);
         return -1;
     }
 
-    push_config.service = service;
-    strncpy(push_config.push_key, key, sizeof(push_config.push_key) - 1);
-    push_config.enabled = true;
+    ret = mbedtls_ssl_config_defaults(&g_push_tls_ctx.conf,
+                                      MBEDTLS_SSL_IS_CLIENT,
+                                      MBEDTLS_SSL_TRANSPORT_STREAM,
+                                      MBEDTLS_SSL_PRESET_DEFAULT);
+    if (ret != 0) {
+        printf("[PUSH] TLS config defaults failed: -0x%x\n", -ret);
+        return -1;
+    }
 
     printf("push_init: service=%d, key configured\n", service);
     return 0;
 }
+#endif /* CONFIG_CRYPTO_MBEDTLS */
 
 /* 发送 HTTPS POST 请求（复用 ai_agent TLS 客户端） */
 static int http_post(const char *url, const char *body)
@@ -536,6 +833,41 @@ static int http_post(const char *url, const char *body)
         printf("push: TLS error %d for %s\n", status, host);
         return status;
     }
+#else
+    printf("[PUSH] http_post: no TLS support (CONFIG_CRYPTO_MBEDTLS off)\n");
+    return -1;
+#endif
+
+    work_buf = malloc(HTTP_BUFFER_SIZE);
+    if (work_buf == NULL) {
+        printf("[PUSH] http_post: no memory\n");
+        return -1;
+    }
+
+    memset(&resp, 0, sizeof(resp));
+    headers[0] = "Content-Type: application/json";
+
+    webclient_set_defaults(&ctx);
+    ctx.protocol_version  = WEBCLIENT_PROTOCOL_VERSION_HTTP_1_1;
+    ctx.method            = "POST";
+    ctx.url               = url;
+    ctx.buffer            = work_buf;
+    ctx.buflen            = HTTP_BUFFER_SIZE;
+    ctx.headers           = headers;
+    ctx.nheaders          = 1;
+    ctx.sink_callback     = push_sink_callback;
+    ctx.sink_callback_arg = &resp;
+    ctx.timeout_sec       = PUSH_HTTP_TIMEOUT_SEC;
+
+#ifdef CONFIG_CRYPTO_MBEDTLS
+    ctx.tls_ops = &g_push_tls_ops;
+    ctx.tls_ctx = &g_push_tls_ctx;
+#endif
+
+    webclient_set_static_body(&ctx, body, strlen(body));
+
+    ret = webclient_perform(&ctx);
+    free(work_buf);
 
     /* 检查 HTTP 状态码 */
     if (status < 200 || status >= 300) {
@@ -571,7 +903,6 @@ int push_send_notification(const char *title, const char *content, const char *g
     }
 
     char url[256] = {0};
-    char body[HTTP_BUFFER_SIZE] = {0};
 
     /* 构建 JSON 请求体 */
     cJSON *root = cJSON_CreateObject();
@@ -592,8 +923,31 @@ int push_send_notification(const char *title, const char *content, const char *g
     /* 根据服务类型构建 URL */
     switch (push_config.service) {
         case PUSH_SERVICE_BARK:
-            snprintf(url, sizeof(url), "%s/%s/ZhiAi",
-                    BARK_API_URL, push_config.push_key);
+            /* Bark 官方 POST 接口：POST https://api.day.app/push
+             * JSON: {"device_key":..., "title":..., "body":...}
+             *
+             * 原来这里拼的是 GET 形式的 "%s/%s/ZhiAi"（BARK_API_URL/key/ZhiAi），
+             * 有两个问题：
+             *   1) title/body 根本没进 URL（只写死一个 "ZhiAi"），推送内容全丢；
+             *   2) 真按 GET 形式拼的话，title/body 里有空格、方括号、中文，
+             *      不做 URL 编码就是非法 URL（Bark 要求 percent-encoding）。
+             * 改成 POST-JSON 之后这两个问题一起没了：内容走 body，不需要编码。 */
+            {
+                cJSON *bk = cJSON_Parse(json_body);
+                if (bk == NULL) {
+                    free(json_body);
+                    return -1;
+                }
+                cJSON_AddStringToObject(bk, "device_key",
+                                        push_config.push_key);
+                free(json_body);
+                json_body = cJSON_PrintUnformatted(bk);
+                cJSON_Delete(bk);
+                if (json_body == NULL) {
+                    return -1;
+                }
+                snprintf(url, sizeof(url), "%s/push", BARK_API_URL);
+            }
             break;
 
         case PUSH_SERVICE_PUSHPLUS:
@@ -613,12 +967,22 @@ int push_send_notification(const char *title, const char *content, const char *g
             return -1;
     }
 
-    /* 发送 HTTP 请求 */
-    int ret = http_post(url, json_body);
+    /* 异步投递：交给推送任务去发，这里立刻返回，UI 不被 TLS 往返阻塞。
+     * 真正的成功判据（HTTP 200/201）和状态码日志在 push_task() 里。 */
+    pthread_mutex_lock(&g_push_job_lock);
+    strncpy(g_push_job.url, url, sizeof(g_push_job.url) - 1);
+    g_push_job.url[sizeof(g_push_job.url) - 1] = '\0';
+    strncpy(g_push_job.body, json_body, sizeof(g_push_job.body) - 1);
+    g_push_job.body[sizeof(g_push_job.body) - 1] = '\0';
+    g_push_job.pending = true;
+    pthread_mutex_unlock(&g_push_job_lock);
+
+    sem_post(&g_push_job_sem);
     free(json_body);
 
-    printf("push_send_notification: title=%s, ret=%d\n", title, ret);
-    return ret;
+    printf("[PUSH] push_send_notification queued: title=%s group=%s\n",
+           title, group ? group : "-");
+    return 0;
 }
 
 /* 发送紧急报警推送 */
