@@ -649,3 +649,9 @@ void robot_ui_switch_view(ui_view_t view)
             break;
     }
 }
+
+/* ==================== 时钟刷新（主循环调用） ==================== */
+void robot_ui_update_time(void)
+{
+    ui_clock_refresh();
+}

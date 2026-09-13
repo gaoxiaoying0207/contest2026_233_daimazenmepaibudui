@@ -6,6 +6,7 @@
 #include <nuttx/config.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include <sched.h>
 #include <lvgl/lvgl.h>
 
@@ -21,6 +22,7 @@
 #include "ai_llm.h"
 #include "ai_sound_detect.h"
 #include "ai_care.h"
+#include "ai_checkin.h"
 #include <string.h>
 
 /* LVGL 定时器 */
@@ -57,12 +59,7 @@ static void on_ai_command_received(const char *action, const char *param)
 
         /* 调用成员二的 AI 模块开始录音 */
         if (g_ai_initialized) {
-/* [临时改动.仅本次联调] 原来这行是 audio_record_start(&g_audio_ctx, NULL, 0)，但成员二当前头文件里的签名是
-             *   int audio_record_start(audio_context_t *ctx, const audio_record_config_t *config)
-             * 参数对不上、编不过;这几处本来是按猜测写的占位桩（传 NULL/0 帧，
-             * 实际什么也不做）。先注释掉以便把 UI 编出来验证，等你按真实
-             * 接口改对再放开。 */
-            /* audio_record_start(&g_audio_ctx, NULL, 0); */
+            audio_record_start(&g_audio_ctx, NULL);
             sm_handle_event(&g_sm_ctx, SM_EVENT_WAKEUP);
         }
     }
@@ -85,12 +82,7 @@ static void on_ai_command_received(const char *action, const char *param)
 
         /* 播放语音回复 */
         if (g_ai_initialized) {
-/* [临时改动.仅本次联调] 原来这行是 audio_play_start(&g_audio_ctx, NULL, 0)，但成员二当前头文件里的签名是
-             *   int audio_play_start(audio_context_t *ctx, const int16_t *data, size_t frames, audio_play_complete_cb_t callback, void *user_data)
-             * 参数对不上、编不过;这几处本来是按猜测写的占位桩（传 NULL/0 帧，
-             * 实际什么也不做）。先注释掉以便把 UI 编出来验证，等你按真实
-             * 接口改对再放开。 */
-            /* audio_play_start(&g_audio_ctx, NULL, 0); */
+            audio_play_start(&g_audio_ctx, NULL, 0, NULL, NULL);
         }
     }
     else if (strcmp(action, "start_remind") == 0) {
@@ -136,12 +128,7 @@ static void on_ai_command_received(const char *action, const char *param)
         if (g_ai_initialized) {
             robot_ui_set_status(ROBOT_STATUS_LISTENING);
             robot_ui_set_face(ROBOT_FACE_THINKING);
-/* [临时改动.仅本次联调] 原来这行是 llm_send_request(&g_llm_ctx, param, NULL)，但成员二当前头文件里的签名是
-             *   ai_llm.h 里没有 llm_send_request，只有 llm_send_text(ctx, ...) / llm_send_audio(ctx, ...)
-             * 参数对不上、编不过;这几处本来是按猜测写的占位桩（传 NULL/0 帧，
-             * 实际什么也不做）。先注释掉以便把 UI 编出来验证，等你按真实
-             * 接口改对再放开。 */
-            /* llm_send_request(&g_llm_ctx, param, NULL); */
+            llm_send_text(&g_llm_ctx, param, NULL, NULL, NULL);
         }
     }
 }
@@ -165,7 +152,7 @@ static void vad_callback(bool speech_detected, void *user_data)
 /**
  * LLM 回调 - AI 回复
  */
-static void llm_response_callback(const char *response, void *user_data)
+__attribute__((unused)) static void llm_response_callback(const char *response, void *user_data)
 {
     printf("[LLM] Response: %s\n", response);
 
@@ -176,12 +163,7 @@ static void llm_response_callback(const char *response, void *user_data)
 
     /* 播放语音 */
     if (g_ai_initialized) {
-/* [临时改动.仅本次联调] 原来这行是 audio_play_start(&g_audio_ctx, NULL, 0)，但成员二当前头文件里的签名是
-             *   int audio_play_start(audio_context_t *ctx, const int16_t *data, size_t frames, audio_play_complete_cb_t callback, void *user_data)
-             * 参数对不上、编不过;这几处本来是按猜测写的占位桩（传 NULL/0 帧，
-             * 实际什么也不做）。先注释掉以便把 UI 编出来验证，等你按真实
-             * 接口改对再放开。 */
-        /* audio_play_start(&g_audio_ctx, NULL, 0); */
+        audio_play_start(&g_audio_ctx, NULL, 0, NULL, NULL);
     }
 
     /* 通知状态机 */
@@ -191,32 +173,87 @@ static void llm_response_callback(const char *response, void *user_data)
 /**
  * 声音检测回调 - 异常声音
  */
-static void sound_alarm_callback(const char *sound_type, int confidence, void *user_data)
+static void sound_alarm_callback(sound_type_t type, float confidence, void *user_data)
 {
-    printf("[SoundDetect] Alarm: %s (confidence: %d)\n", sound_type, confidence);
+    const char *type_name = sound_detect_get_type_name(type);
+    printf("[SoundDetect] Alarm: %s (confidence: %.2f)\n", type_name, confidence);
 
     /* 触发报警 */
-    robot_ui_show_alarm(sound_type);
-    report_alarm(sound_type, "Abnormal sound detected");
+    robot_ui_show_alarm(type_name);
+    report_alarm(type_name, "Abnormal sound detected");
 
     /* 通知状态机 */
     sm_handle_event(&g_sm_ctx, SM_EVENT_ALARM_DETECTED);
 }
 
 /**
- * 主动关怀回调
+ * 关怀确认按钮回调 - 用户点击"我没事"或"需要帮助"后触发
+ * 由 UI 线程调用，通过 ai_checkin_respond 提交给状态机
  */
-static void care_remind_callback(const char *title, const char *content, void *user_data)
+static void checkin_btn_callback(uint64_t checkin_id, bool needs_help, void *user_data)
 {
-    printf("[Care] Reminder: %s - %s\n", title, content);
+    uint64_t now_ms = lv_tick_get();
+    printf("[Checkin] Respond: id=%lu needs_help=%d\n",
+           (unsigned long)checkin_id, needs_help);
 
-    /* 显示提醒 */
+    int ret = ai_checkin_respond(checkin_id, needs_help, now_ms);
+    if (ret != 0) {
+        printf("[Checkin] respond failed: %d\n", ret);
+    }
+}
+
+/* 用于 lv_async_call 的 show_checkin 参数 */
+typedef struct {
+    uint64_t checkin_id;
+    uint32_t timeout_ms;
+    checkin_btn_cb_t cb;
+    void *user_data;
+} show_checkin_arg_t;
+
+/* lv_async_call 回调：在 LVGL 线程中显示 checkin 面板 */
+static void show_checkin_async(void *arg_ptr)
+{
+    show_checkin_arg_t *arg = (show_checkin_arg_t *)arg_ptr;
+    touch_ui_show_checkin(arg->checkin_id, arg->timeout_ms,
+                          arg->cb, arg->user_data);
+    free(arg);
+}
+
+/**
+ * 主动关怀回调 - 从 care 模块线程调用
+ * care_remind_callback 不直接操作 LVGL，通过 lv_async_call 投递到 UI 线程
+ */
+static void care_remind_callback(care_type_t type, const char *message, void *user_data)
+{
+    const char *type_name = care_get_type_name(type);
+    printf("[Care] Reminder: %s - %s\n", type_name, message);
+
+    /* 显示提醒（robot_ui_* 内部已有线程安全机制） */
     robot_ui_set_status(ROBOT_STATUS_REMINDING);
     robot_ui_set_face(ROBOT_FACE_WORRIED);
-    robot_ui_show_reminder(title, content);
+    robot_ui_show_reminder(type_name, message);
 
     /* 发送推送 */
-    push_send_health_reminder(title, content);
+    push_send_health_reminder(type_name, message);
+
+    /* 启动关怀确认：分配 30 秒超时 */
+    uint64_t checkin_id = 0;
+    uint64_t now_ms = lv_tick_get();
+    if (ai_checkin_begin(now_ms, 30000, &checkin_id) == 0) {
+        printf("[Checkin] Started: id=%lu\n", (unsigned long)checkin_id);
+
+        /* 通过 lv_async_call 投递到 LVGL 线程显示 checkin 面板 */
+        show_checkin_arg_t *arg = malloc(sizeof(show_checkin_arg_t));
+        if (arg) {
+            arg->checkin_id = checkin_id;
+            arg->timeout_ms = 30000;
+            arg->cb = checkin_btn_callback;
+            arg->user_data = NULL;
+            lv_async_call(show_checkin_async, arg);
+        }
+    } else {
+        printf("[Checkin] Failed to start\n");
+    }
 }
 
 /* ==================== MQTT 消息回调处理 ==================== */
@@ -274,8 +311,11 @@ int main(int argc, char *argv[])
     /* ===== 初始化网络通信 ===== */
     network_comm_init();
 
-    /* ===== 连接 WiFi ===== */
-    wifi_connect("魔王城", "sjmbahczdszjj");
+    /* ===== WiFi 连接 ===== */
+    /* NOTE: 板子通过 USB RNDIS 上网，WiFi 代码未实际使用。
+     * network_comm.c 中的 wifi_connect() 只是设置 wifi_config.connected = true，
+     * 让 MQTT 能启动连接。不要删除此调用，否则 MQTT 不会连接。 */
+    wifi_connect("RNDIS", "");
 
     /* ===== 启动网络后台任务 =====
      * 负责 MQTT 连接 broker.emqx.io:1883、收消息、发心跳。
@@ -301,16 +341,6 @@ int main(int argc, char *argv[])
     /* ===== 初始化 AI 模块 (成员二) ===== */
     printf("Initializing AI modules...\n");
 
-#if 0
-    /* [临时改动.仅本次联调] 这整段是照一套**当前树里不存在**的 API 写的，编不过:
-     *   - audio_config_t 没有 bits_per_sample 成员
-     *   - sound_detect_init() 需要 (ctx, config) 两个参数，这里是 1 个
-     *   - sound_detect_set_alarm_callback() 不存在
-     *   - care_init() 需要 (ctx, config) 两个参数，这里是 1 个
-     *   - care_set_remind_callback() 不存在
-     * 为了先把 UI 编出来看界面，整段停用。请按成员二 ai_audio.h / ai_sound_detect.h /
-     * ai_care.h 的真实签名改对后放开，并删掉这个 #if 0。 */
-
     /* 初始化状态机 */
     if (sm_init(&g_sm_ctx) == 0) {
         printf("State machine initialized\n");
@@ -320,7 +350,7 @@ int main(int argc, char *argv[])
     audio_config_t audio_config = {
         .sample_rate = AUDIO_RATE_16K,
         .channels = AUDIO_CH_MONO,
-        .bits_per_sample = 16
+        .format = AUDIO_FORMAT_S16_LE
     };
     if (audio_init(&g_audio_ctx, &audio_config) == 0) {
         printf("Audio module initialized\n");
@@ -334,21 +364,34 @@ int main(int argc, char *argv[])
     }
 
     /* 初始化声音检测 */
-    if (sound_detect_init(&g_sound_ctx) == 0) {
+    sound_detect_config_t detect_cfg = {
+        .mode = DETECT_MODE_REALTIME,
+        .threshold = SOUND_DETECT_THRESHOLD_DEFAULT,
+        .sample_rate = SOUND_DETECT_SAMPLE_RATE,
+        .frame_ms = SOUND_DETECT_FRAME_MS,
+        .enable_vad = true,
+        .enable_feedback = true,
+        .callback = sound_alarm_callback,
+        .user_data = NULL
+    };
+    if (sound_detect_init(&g_sound_ctx, &detect_cfg) == 0) {
         printf("Sound detect initialized\n");
-        /* 注册报警回调 */
-        sound_detect_set_alarm_callback(&g_sound_ctx, sound_alarm_callback, NULL);
     }
 
     /* 初始化主动关怀 */
-    if (care_init(&g_care_ctx) == 0) {
+    care_config_t care_cfg = {
+        .enable_greeting = true,
+        .enable_health = true,
+        .enable_life = true,
+        .enable_exercise = true,
+        .callback = care_remind_callback,
+        .user_data = NULL
+    };
+    if (care_init(&g_care_ctx, &care_cfg) == 0) {
         printf("Care module initialized\n");
-        /* 注册提醒回调 */
-        care_set_remind_callback(&g_care_ctx, care_remind_callback, NULL);
     }
-#endif /* 临时停用的 AI 初始化 */
 
-    g_ai_initialized = false;
+    g_ai_initialized = true;
     printf("AI modules initialization done\n");
 
     /* ===== 初始化机器人 UI（先创建主屏并 lv_scr_load，成为活动屏） ===== */
@@ -365,7 +408,7 @@ int main(int argc, char *argv[])
     /* ===== 设置初始状态 ===== */
     robot_ui_set_status(ROBOT_STATUS_IDLE);
     robot_ui_set_face(ROBOT_FACE_HAPPY);
-    robot_ui_set_ai_reply("你好！我是智爱陪伴\n有什么可以帮你的吗?");
+    robot_ui_set_ai_reply("你好！我是智爱陪伴\n有什么可以帮你的吗？");
 
     /* ===== 显示主菜单 ===== */
     touch_ui_show_menu(MENU_TYPE_MAIN);
@@ -376,11 +419,12 @@ int main(int argc, char *argv[])
     while (1) {
         static int  net_tick = 0;
         static bool net_ok   = false;
+        static int  time_tick = 0;
 
         lvgl_timer_handler();
 
         /* 每 ~200ms 刷新一次状态栏上的网络状态。
-         * LVGL 不是线程安全的，所以只在这个任务里改控件;network_task 那边
+         * LVGL 不是线程安全的，所以只在这个任务里改控件；network_task 那边
          * 只维护 mqtt_config.connected，由这里轮询。
          */
         if (++net_tick >= 40) {
@@ -393,9 +437,44 @@ int main(int argc, char *argv[])
             }
         }
 
+        /* 每 ~1s 刷新状态栏时钟 */
+        if (++time_tick >= 200) {
+            time_tick = 0;
+            robot_ui_update_time();
+        }
+
         /* 运行 AI 模块 */
         if (g_ai_initialized) {
             sm_run(&g_sm_ctx);
+
+            /* 运行关怀确认状态机 */
+            ai_checkin_tick(lv_tick_get());
+
+            /* 轮询 checkin 状态并更新 UI */
+            checkin_snapshot_t snap = ai_checkin_snapshot();
+            static checkin_state_t last_checkin_state = CHECKIN_IDLE;
+            if (snap.state != last_checkin_state) {
+                last_checkin_state = snap.state;
+                switch (snap.state) {
+                    case CHECKIN_SENDING:
+                        touch_ui_update_checkin_state(TOUCH_CHECKIN_SENDING);
+                        break;
+                    case CHECKIN_SENT:
+                        touch_ui_update_checkin_state(TOUCH_CHECKIN_SENT);
+                        /* 通知成功后 2 秒自动关闭面板 */
+                        /* TODO: 用 lv_timer 延迟关闭 */
+                        break;
+                    case CHECKIN_FAILED:
+                        touch_ui_update_checkin_state(TOUCH_CHECKIN_FAILED);
+                        break;
+                    case CHECKIN_IDLE:
+                        /* 确认流程结束，隐藏面板 */
+                        touch_ui_hide_checkin();
+                        break;
+                    default:
+                        break;
+                }
+            }
         }
 
         usleep(5000); // 5ms 刷新周期

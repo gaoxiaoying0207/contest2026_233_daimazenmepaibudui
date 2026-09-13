@@ -47,6 +47,16 @@ typedef struct {
 static reminder_t reminders[MAX_REMINDERS];
 static int reminder_count = 0;
 
+/* 关怀确认面板静态变量 */
+static lv_obj_t *checkin_panel = NULL;
+static lv_obj_t *checkin_status_lbl = NULL;
+static lv_obj_t *checkin_btn_fine = NULL;
+static lv_obj_t *checkin_btn_help = NULL;
+static uint64_t checkin_current_id = 0;
+static bool checkin_confirmed = false;
+static checkin_btn_cb_t checkin_cb = NULL;
+static void *checkin_cb_user_data = NULL;
+
 /* ==================== 样式定义 ==================== */
 
 /* 老人友好样式 - 大字体、高对比度 */
@@ -85,6 +95,8 @@ static void setting_reset_event_handler(lv_event_t *e);
 static void interval_button_event_handler(lv_event_t *e);
 static void show_confirm_dialog(const char *title, const char *content,
                                lv_event_cb_t callback);
+static void checkin_btn_fine_handler(lv_event_t *e);
+static void checkin_btn_help_handler(lv_event_t *e);
 
 /* ==================== 初始化老人友好样式 ==================== */
 static void init_elder_styles(void)
@@ -425,6 +437,7 @@ static void create_slider_setting(lv_obj_t *parent, const char *title,
     lv_obj_t *title_label = lv_label_create(title_row);
     lv_label_set_text(title_label, title);
     lv_obj_set_style_text_font(title_label, &lv_font_ui_20, 0);
+    lv_obj_set_style_text_color(title_label, lv_color_hex(0xFFFFFF), 0);
 
     lv_obj_t *value_label = lv_label_create(title_row);
     lv_label_set_text_fmt(value_label, "%d%%", value);
@@ -457,6 +470,7 @@ static void create_switch_setting(lv_obj_t *parent, const char *title,
     lv_obj_t *title_label = lv_label_create(container);
     lv_label_set_text(title_label, title);
     lv_obj_set_style_text_font(title_label, &lv_font_ui_20, 0);
+    lv_obj_set_style_text_color(title_label, lv_color_hex(0xFFFFFF), 0);
 
     /* 开关 */
     lv_obj_t *sw = lv_switch_create(container);
@@ -486,6 +500,7 @@ static void create_interval_setting(lv_obj_t *parent, const char *title,
     lv_obj_t *title_label = lv_label_create(container);
     lv_label_set_text(title_label, title);
     lv_obj_set_style_text_font(title_label, &lv_font_ui_20, 0);
+    lv_obj_set_style_text_color(title_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_pad_bottom(title_label, 10, 0);
 
     /* 间隔选择按钮组 */
@@ -590,7 +605,8 @@ static void menu_item_event_handler(lv_event_t *e)
 static void back_button_event_handler(lv_event_t *e)
 {
     touch_ui_play_sound("back");
-    touch_ui_go_back();
+    /* 返回后始终显示主菜单，避免返回后找不到主界面 */
+    touch_ui_show_menu(MENU_TYPE_MAIN);
 }
 
 /* 滑块值改变事件 */
@@ -816,4 +832,168 @@ void touch_ui_play_sound(const char *sound_type)
 {
     /* TODO: 播放对应音效 */
     printf("Sound: %s\n", sound_type);
+}
+
+/* ==================== 关怀确认面板 ==================== */
+
+/* "我没事" 按钮回调 */
+static void checkin_btn_fine_handler(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code != LV_EVENT_CLICKED) return;
+    if (checkin_confirmed) return;
+
+    printf("[Checkin] User: I'm fine (id=%lu)\n", (unsigned long)checkin_current_id);
+    checkin_confirmed = true;
+    lv_obj_add_state(checkin_btn_fine, LV_STATE_DISABLED);
+    lv_obj_add_state(checkin_btn_help, LV_STATE_DISABLED);
+    lv_label_set_text(checkin_status_lbl, "正在通知...");
+    lv_obj_set_style_text_color(checkin_status_lbl, lv_color_hex(0xFFC107), 0);
+    touch_ui_play_sound("click");
+
+    if (checkin_cb) {
+        checkin_cb(checkin_current_id, false, checkin_cb_user_data);
+    }
+}
+
+/* "需要帮助" 按钮回调 */
+static void checkin_btn_help_handler(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code != LV_EVENT_CLICKED) return;
+    if (checkin_confirmed) return;
+
+    printf("[Checkin] User: Need help (id=%lu)\n", (unsigned long)checkin_current_id);
+    checkin_confirmed = true;
+    lv_obj_add_state(checkin_btn_fine, LV_STATE_DISABLED);
+    lv_obj_add_state(checkin_btn_help, LV_STATE_DISABLED);
+    lv_label_set_text(checkin_status_lbl, "正在通知...");
+    lv_obj_set_style_text_color(checkin_status_lbl, lv_color_hex(0xFFC107), 0);
+    touch_ui_play_sound("click");
+
+    if (checkin_cb) {
+        checkin_cb(checkin_current_id, true, checkin_cb_user_data);
+    }
+}
+
+/* 显示关怀确认面板 */
+void touch_ui_show_checkin(uint64_t checkin_id, uint32_t timeout_ms,
+                           checkin_btn_cb_t cb, void *user_data)
+{
+    touch_ui_hide_checkin();
+    checkin_current_id = checkin_id;
+    checkin_confirmed = false;
+    checkin_cb = cb;
+    checkin_cb_user_data = user_data;
+
+    checkin_panel = lv_obj_create(current_screen);
+    lv_obj_set_size(checkin_panel, LV_PCT(90), LV_PCT(70));
+    lv_obj_align(checkin_panel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(checkin_panel, lv_color_hex(0x1A1A2E), 0);
+    lv_obj_set_style_bg_opa(checkin_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(checkin_panel, 20, 0);
+    lv_obj_set_style_border_width(checkin_panel, 2, 0);
+    lv_obj_set_style_border_color(checkin_panel, lv_color_hex(0xFF9800), 0);
+    lv_obj_set_flex_flow(checkin_panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(checkin_panel, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(checkin_panel, 20, 0);
+    lv_obj_set_style_pad_row(checkin_panel, 15, 0);
+
+    lv_obj_t *title = lv_label_create(checkin_panel);
+    lv_label_set_text(title, "关怀提醒");
+    lv_obj_set_style_text_font(title, &lv_font_ui_24, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFFEB3B), 0);
+
+    lv_obj_t *hint = lv_label_create(checkin_panel);
+    lv_label_set_text(hint, "您还好吗？请确认状态");
+    lv_obj_set_style_text_font(hint, &lv_font_ui_20, 0);
+    lv_obj_set_style_text_color(hint, lv_color_hex(0xFFFFFF), 0);
+
+    checkin_status_lbl = lv_label_create(checkin_panel);
+    lv_label_set_text(checkin_status_lbl, "等待确认");
+    lv_obj_set_style_text_font(checkin_status_lbl, &lv_font_ui_20, 0);
+    lv_obj_set_style_text_color(checkin_status_lbl, lv_color_hex(0x4CAF50), 0);
+
+    /* "我没事" 按钮 - 绿色 */
+    checkin_btn_fine = lv_btn_create(checkin_panel);
+    lv_obj_set_size(checkin_btn_fine, 200, 60);
+    lv_obj_set_style_bg_color(checkin_btn_fine, lv_color_hex(0x4CAF50), 0);
+    lv_obj_set_style_radius(checkin_btn_fine, 30, 0);
+    lv_obj_add_event_cb(checkin_btn_fine, checkin_btn_fine_handler,
+                        LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lbl_fine = lv_label_create(checkin_btn_fine);
+    lv_label_set_text(lbl_fine, "我没事");
+    lv_obj_set_style_text_font(lbl_fine, &lv_font_ui_20, 0);
+    lv_obj_center(lbl_fine);
+
+    /* "需要帮助" 按钮 - 红色 */
+    checkin_btn_help = lv_btn_create(checkin_panel);
+    lv_obj_set_size(checkin_btn_help, 200, 60);
+    lv_obj_set_style_bg_color(checkin_btn_help, lv_color_hex(0xF44336), 0);
+    lv_obj_set_style_radius(checkin_btn_help, 30, 0);
+    lv_obj_add_event_cb(checkin_btn_help, checkin_btn_help_handler,
+                        LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lbl_help = lv_label_create(checkin_btn_help);
+    lv_label_set_text(lbl_help, "需要帮助");
+    lv_obj_set_style_text_font(lbl_help, &lv_font_ui_20, 0);
+    lv_obj_center(lbl_help);
+
+    (void)timeout_ms;
+    printf("[Checkin] UI shown: id=%lu\n", (unsigned long)checkin_id);
+}
+
+/* 更新关怀确认状态（lv_async_call 投递到 LVGL 线程） */
+static void update_checkin_state_async(void *state_ptr)
+{
+    touch_checkin_state_t state = (touch_checkin_state_t)(intptr_t)state_ptr;
+    if (!checkin_status_lbl) return;
+
+    switch (state) {
+        case TOUCH_CHECKIN_WAITING:
+            lv_label_set_text(checkin_status_lbl, "等待确认");
+            lv_obj_set_style_text_color(checkin_status_lbl, lv_color_hex(0x4CAF50), 0);
+            if (checkin_btn_fine) lv_obj_clear_state(checkin_btn_fine, LV_STATE_DISABLED);
+            if (checkin_btn_help) lv_obj_clear_state(checkin_btn_help, LV_STATE_DISABLED);
+            checkin_confirmed = false;
+            break;
+        case TOUCH_CHECKIN_SENDING:
+            lv_label_set_text(checkin_status_lbl, "正在通知...");
+            lv_obj_set_style_text_color(checkin_status_lbl, lv_color_hex(0xFFC107), 0);
+            break;
+        case TOUCH_CHECKIN_SENT:
+            lv_label_set_text(checkin_status_lbl, "通知成功 ✓");
+            lv_obj_set_style_text_color(checkin_status_lbl, lv_color_hex(0x4CAF50), 0);
+            break;
+        case TOUCH_CHECKIN_FAILED:
+            lv_label_set_text(checkin_status_lbl, "通知失败，请重试");
+            lv_obj_set_style_text_color(checkin_status_lbl, lv_color_hex(0xF44336), 0);
+            if (checkin_btn_fine) lv_obj_clear_state(checkin_btn_fine, LV_STATE_DISABLED);
+            if (checkin_btn_help) lv_obj_clear_state(checkin_btn_help, LV_STATE_DISABLED);
+            checkin_confirmed = false;
+            break;
+        default:
+            break;
+    }
+}
+
+void touch_ui_update_checkin_state(touch_checkin_state_t state)
+{
+    lv_async_call(update_checkin_state_async, (void *)(intptr_t)state);
+}
+
+/* 隐藏关怀确认面板 */
+void touch_ui_hide_checkin(void)
+{
+    if (checkin_panel) {
+        lv_obj_del(checkin_panel);
+        checkin_panel = NULL;
+        checkin_status_lbl = NULL;
+        checkin_btn_fine = NULL;
+        checkin_btn_help = NULL;
+    }
+    checkin_current_id = 0;
+    checkin_confirmed = false;
+    checkin_cb = NULL;
+    checkin_cb_user_data = NULL;
 }

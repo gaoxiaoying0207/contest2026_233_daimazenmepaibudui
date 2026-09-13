@@ -62,4 +62,19 @@ void touch_ui_clear_reminders(void);
 void touch_ui_vibrate(int duration_ms);
 void touch_ui_play_sound(const char *sound_type);
 
+/* ==================== 关怀确认面板 ==================== */
+typedef enum {
+    TOUCH_CHECKIN_WAITING = 2,
+    TOUCH_CHECKIN_SENDING = 5,
+    TOUCH_CHECKIN_SENT    = 6,
+    TOUCH_CHECKIN_FAILED  = 7
+} touch_checkin_state_t;
+
+typedef void (*checkin_btn_cb_t)(uint64_t checkin_id, bool needs_help, void *user_data);
+
+void touch_ui_show_checkin(uint64_t checkin_id, uint32_t timeout_ms,
+                           checkin_btn_cb_t cb, void *user_data);
+void touch_ui_update_checkin_state(touch_checkin_state_t state);
+void touch_ui_hide_checkin(void);
+
 #endif /* TOUCH_UI_H */
