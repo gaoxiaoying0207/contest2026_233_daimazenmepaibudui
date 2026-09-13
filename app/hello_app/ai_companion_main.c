@@ -665,8 +665,14 @@ int main(int argc, char *argv[])
 
   if (sound_self_test && g_sound_started)
     {
-      static int16_t test_audio[SOUND_DETECT_FRAMES_PER_WINDOW];
-      memset(test_audio, 0, sizeof(test_audio));
+      int16_t *test_audio = calloc(SOUND_DETECT_FRAMES_PER_WINDOW,
+                                   sizeof(*test_audio));
+      if (test_audio == NULL)
+        {
+          printf("[自检] 内存不足，跳过测试\n");
+        }
+      else
+        {
       for (size_t i = 0; i < SOUND_DETECT_FRAMES_PER_WINDOW; i += 80)
         {
           test_audio[i] = (i / 80) % 2 == 0 ? INT16_MAX : INT16_MIN;
@@ -676,6 +682,8 @@ int main(int argc, char *argv[])
                               SOUND_DETECT_FRAMES_PER_WINDOW);
       printf("[自检] 声音检测测试数据已注入: %s (%d)\n",
              ret == OK ? "成功" : "失败", ret);
+          free(test_audio);
+        }
     }
 
   /* 3. 主线程等待退出 */
