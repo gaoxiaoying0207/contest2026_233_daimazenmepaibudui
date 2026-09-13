@@ -12,9 +12,10 @@ if(CONFIG_LVX_USE_CONTEST2026_233_HELLO_APP)
   set(HELLO_APP_COMPILE_FLAGS "")
 
   if(CONFIG_HELLO_APP_LLM_AI_AGENT)
-    # The ai_agent include is at ${NUTTX_APPS_DIR}/packages/ai_agent/include
     list(APPEND HELLO_APP_COMPILE_FLAGS
       -I${NUTTX_APPS_DIR}/packages/ai_agent/include
+      -I${NUTTX_APPS_DIR}/packages/ai_agent/src
+      -I${NUTTX_APPS_DIR}/packages/ai_agent/src/voice
     )
   endif()
 
@@ -33,8 +34,5 @@ if(CONFIG_LVX_USE_CONTEST2026_233_HELLO_APP)
     COMPILE_FLAGS ${HELLO_APP_COMPILE_FLAGS}
     DEPENDS ${HELLO_APP_DEPENDS}
     SRCS ${HELLO_APP_SRCS}
-    # 报警模块（board/contest_board/src/sf32lb52_alarm.h）在板级 src 目录下，
-    # 与 app/hw_test/CMakeLists.txt 同一写法。
-    INCLUDE_DIRECTORIES ${NUTTX_BOARD_ABS_DIR}/src
   )
 endif()
