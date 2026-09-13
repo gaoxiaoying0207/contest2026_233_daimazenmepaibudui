@@ -27,6 +27,12 @@
 #include "voice/voice_tts.h"
 #include "volc_asr.h"
 #include "volc_tts.h"
+#include "ai_volc_config.h"
+
+/* config_store 函数 (ai_agent 内部, 通过静态库链接) */
+
+extern int claw_config_get(const char *key, char *buf, size_t buf_size);
+extern int claw_config_set(const char *key, const char *value);
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -584,6 +590,43 @@ static void print_system_status(sm_context_t *ctx)
   printf("========================================\n\n");
 }
 
+/**
+ * @brief  检查并预置火山引擎凭据
+ * @note   /data 是 tmpfs, 重启后配置丢失, 此函数在开机时自动补写
+ */
+
+static void seed_volc_credentials(void)
+{
+  char buf[128] = {0};
+
+  /* 只检查一个关键字段, 不存在则全部写入 */
+
+  if (claw_config_get(VOLC_CFG_KEY_API_KEY, buf, sizeof(buf)) == 0 &&
+      buf[0] != '\0')
+    {
+      printf("[配置] 火山引擎凭据已存在\n");
+      return;
+    }
+
+  printf("[配置] 写入火山引擎凭据...\n");
+
+  /* 凭据为空时不写入, 避免覆盖已有配置 */
+
+  if (VOLC_API_KEY[0] == '\0')
+    {
+      printf("[配置] 警告: ai_volc_config.h 中凭据为空, 请填写后重新编译\n");
+      return;
+    }
+
+  claw_config_set(VOLC_CFG_KEY_API_KEY, VOLC_API_KEY);
+  claw_config_set(VOLC_CFG_KEY_APPKEY,  VOLC_APPKEY);
+  claw_config_set(VOLC_CFG_KEY_TOKEN,   VOLC_TOKEN);
+  claw_config_set(VOLC_CFG_KEY_ASR_CLUSTER, VOLC_ASR_CLUSTER);
+  claw_config_set(VOLC_CFG_KEY_TTS_CLUSTER, VOLC_TTS_CLUSTER);
+  claw_config_set(VOLC_CFG_KEY_SPEAKER, VOLC_SPEAKER);
+  printf("[配置] 凭据写入完成\n");
+}
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -670,6 +713,10 @@ int main(int argc, char *argv[])
     }
 
   /* 3.5 注册语音 ASR/TTS 后端 (火山引擎) */
+
+  /* 先检查/补写凭据 (/data 重启后丢失) */
+
+  seed_volc_credentials();
 
   printf("[初始化] 正在注册语音后端...\n");
   volc_asr_register();

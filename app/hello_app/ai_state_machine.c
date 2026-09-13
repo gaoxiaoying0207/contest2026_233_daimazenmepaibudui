@@ -74,8 +74,8 @@ static const char *g_event_names[SM_EVENT_MAX] =
 static const uint32_t g_default_timeouts[SM_STATE_MAX] =
 {
   [SM_STATE_IDLE]        = 0,        /* 待机状态不超时 */
-  [SM_STATE_LISTENING]   = 10000,    /* 监听10秒超时 */
-  [SM_STATE_AI_TALKING]  = 30000,    /* AI对话30秒超时 */
+  [SM_STATE_LISTENING]   = 15000,    /* 监听15秒超时(给用户足够时间说话) */
+  [SM_STATE_AI_TALKING]  = 90000,    /* AI对话90秒(ASR+LLM+TTS整链路) */
   [SM_STATE_CARE_REMIND] = 5000,     /* 提醒播放5秒 */
   [SM_STATE_ALARM]       = 60000     /* 报警状态60秒 */
 };
@@ -181,6 +181,10 @@ static void sm_ai_talking_enter(void *ctx)
 {
   sm_context_t *sm_ctx = (sm_context_t *)ctx;
   SM_DEBUG("进入AI对话状态: 等待云端回复");
+
+  /* 请求在飞时禁用超时，防止 ASR+LLM+TTS 整链路被踢 */
+
+  sm_set_timeout(sm_ctx, SM_STATE_AI_TALKING, 0);
 
   /* 通过 user_data 调用主程序的 AI 对话处理函数 (ASR → LLM) */
 

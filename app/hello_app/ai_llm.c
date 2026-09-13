@@ -1029,27 +1029,14 @@ int llm_send_audio(llm_context_t *ctx,
                    llm_complete_cb_t complete_cb,
                    void *user_data)
 {
-  if (ctx == NULL || audio_data == NULL || frames == 0)
-    {
-      return -EINVAL;
-    }
+  (void)ctx; (void)audio_data; (void)frames;
+  (void)stream_cb; (void)complete_cb; (void)user_data;
 
-  LLM_DEBUG("收到音频数据: frames=%zu", frames);
+  /* ASR 已移至 ai_companion_main.c 的 process_ai_dialogue()，
+   * 直接调用 voice_asr_recognize() 后走 llm_send_text()。
+   * 此函数不再使用，保留签名以兼容。 */
 
-  /* TODO: 实现ASR（自动语音识别） */
-  /* 1. 将音频数据发送到ASR服务 */
-  /* 2. 获取识别结果文本 */
-  /* 3. 调用llm_send_text发送文本 */
-
-  /* 模拟ASR结果 */
-
-  const char *asr_result = "你好，请问今天天气怎么样？";
-
-  LLM_DEBUG("ASR识别结果: %s", asr_result);
-
-  /* 发送文本请求 */
-
-  return llm_send_text(ctx, asr_result, stream_cb, complete_cb, user_data);
+  return -ENOSYS;
 }
 
 /**
