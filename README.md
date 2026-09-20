@@ -37,6 +37,7 @@ contest2026_233_daimazenmepaibudui/
 ├── model_output/                          # 训练侧模型和验证产物
 ├── patches/                               # vendor、NuttX、ai_agent 补丁
 ├── quickapp/hello_quickapp/               # 快应用示例目录（无用）
+├──skills/sound-detection/                 #异常声音并触发警报skill
 ├── src/                                   # SiFli SDK 工程入口
 ├── tools/                                 # 音频训练、对拍、镜像和 PC 诊断工具
 ├── README.md                              # 本说明
